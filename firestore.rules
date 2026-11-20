@@ -1,0 +1,68 @@
+rules_version = '2';
+
+// SortMate demo rules.
+//
+// The app uses Firebase Anonymous Auth, so every install has a UID but no
+// verified identity. These rules keep the database closed to the public while
+// allowing any signed-in device that knows a join code to read/write a
+// household. This is appropriate for a class demo only.
+//
+// Production hardening:
+//   - real accounts (email link / Google) and custom claims
+//   - a membership document checked by every read/write
+//   - App Check
+//   - per-field validation and audit fields (createdBy, updatedBy)
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function validJoinCode() {
+      return request.resource.data.joinCode is string
+        && request.resource.data.joinCode.size() == 6;
+    }
+
+    match /households/{householdId} {
+      // Join-by-code performs a limited query on this collection.
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && validJoinCode();
+      allow update: if signedIn();
+      allow delete: if false;
+
+      match /members/{memberId} {
+        allow read: if signedIn();
+        allow create, update: if signedIn();
+        allow delete: if signedIn();
+      }
+
+      match /bills/{billId} {
+        allow read: if signedIn();
+        allow create, update: if signedIn()
+          && request.resource.data.totalCents is int
+          && request.resource.data.totalCents > 0
+          && request.resource.data.paidByMemberId is string
+          && request.resource.data.splitAmongMemberIds is list;
+        allow delete: if signedIn();
+      }
+
+      match /chores/{choreId} {
+        allow read: if signedIn();
+        allow create, update: if signedIn()
+          && request.resource.data.title is string
+          && request.resource.data.title.size() > 0;
+        allow delete: if signedIn();
+      }
+    }
+
+    // Deny anything not explicitly matched above.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

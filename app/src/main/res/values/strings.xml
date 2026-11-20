@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">SortMate</string>
+    <string name="app_tagline">Student housemate &amp; academic manager</string>
+
+    <string name="channel_bills">Bill reminders</string>
+    <string name="channel_chores">Chore reminders</string>
+    <string name="channel_presence">Household activity</string>
+    <string name="channel_quiet">Quiet hours</string>
+</resources>

@@ -1,0 +1,32 @@
+# Gradle
+.gradle/
+build/
+.kotlin/
+
+# Android Studio / IntelliJ
+*.iml
+/.idea/
+/captures/
+.externalNativeBuild/
+.cxx/
+
+# Local configuration
+local.properties
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Firebase config is environment-specific and should not be committed in public repos.
+# Remove this line if your instructor requires the config in the repository.
+app/google-services.json
+
+# Build outputs and signing material
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# Logs
+*.log
+firebase-debug.log

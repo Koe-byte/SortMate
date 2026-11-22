@@ -1,11 +1,26 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
 }
 
-// Firebase is optional during development. Drop a real google-services.json into
-// app/ and this plugin turns on automatically; the app otherwise runs in local mode.
+// Supabase credentials live in the gitignored local.properties so they never
+// reach the repository. Missing values leave the app in local demo mode.
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) {
+        file.inputStream().use { load(it) }
+    }
+}
+
+fun localValue(key: String): String = localProperties.getProperty(key).orEmpty()
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+
+// Firebase config enables FCM only. Supabase sync also works without this file.
 if (file("google-services.json").exists()) {
     apply(plugin = "com.google.gms.google-services")
 }
@@ -25,6 +40,13 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        buildConfigField("String", "SUPABASE_URL", "\"${localValue("SUPABASE_URL")}\"")
+        buildConfigField(
+            "String",
+            "SUPABASE_PUBLISHABLE_KEY",
+            "\"${localValue("SUPABASE_PUBLISHABLE_KEY")}\"",
+        )
     }
 
     buildTypes {
@@ -44,6 +66,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {
@@ -93,9 +116,14 @@ dependencies {
     implementation(libs.kotlinx.coroutines.play.services)
 
     implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.auth)
-    implementation(libs.firebase.firestore)
     implementation(libs.firebase.messaging)
+
+    implementation(platform(libs.supabase.bom))
+    implementation(libs.supabase.postgrest)
+    implementation(libs.supabase.auth)
+    implementation(libs.supabase.realtime)
+    implementation(libs.ktor.client.okhttp)
+    implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.junit)
 }

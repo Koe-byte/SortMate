@@ -43,6 +43,7 @@ import com.example.sortmate.ui.components.BillCard
 import com.example.sortmate.ui.components.ChoreCard
 import com.example.sortmate.ui.components.EmptyState
 import com.example.sortmate.ui.components.PresencePill
+import com.example.sortmate.ui.components.markFirstDraw
 import com.example.sortmate.ui.components.SectionTitle
 import com.example.sortmate.ui.components.StatCard
 import com.example.sortmate.util.formatPesoShort
@@ -269,6 +270,7 @@ private fun PresenceCard(
                 )
                 Text(
                     text = status.label,
+                    modifier = Modifier.markFirstDraw("presence_draw status=$status"),
                     style = MaterialTheme.typography.titleLarge,
                 )
                 Text(

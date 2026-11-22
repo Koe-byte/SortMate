@@ -1,0 +1,3 @@
+-- Local seed data intentionally left empty.
+-- Households are created through the create_household RPC, which needs a real
+-- auth.users row. The Android app also ships a fully local demo household.

@@ -2,6 +2,7 @@ package com.example.sortmate.data.local.dao
 
 import androidx.room.Dao
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Upsert
 import com.example.sortmate.data.local.entity.MemberEntity
 import com.example.sortmate.domain.model.PresenceStatus
@@ -25,6 +26,11 @@ interface MemberDao {
     @Upsert
     suspend fun upsert(member: MemberEntity)
 
+    @Transaction
+    suspend fun mergeRemote(member: MemberEntity) {
+        if (get(member.id)?.isSynced != false) upsert(member)
+    }
+
     @Upsert
     suspend fun upsertAll(members: List<MemberEntity>)
 
@@ -46,11 +52,11 @@ interface MemberDao {
     )
     suspend fun updateFcmToken(id: String, token: String, now: Long)
 
-    @Query("UPDATE members SET isSynced = 1 WHERE id = :id")
-    suspend fun markSynced(id: String)
+    @Query("UPDATE members SET isSynced = 1 WHERE id = :id AND updatedAt = :version")
+    suspend fun markSynced(id: String, version: Long)
 
-    @Query("SELECT * FROM members WHERE isSynced = 0")
-    suspend fun getUnsynced(): List<MemberEntity>
+    @Query("SELECT * FROM members WHERE householdId = :householdId AND isSynced = 0")
+    suspend fun getUnsynced(householdId: String): List<MemberEntity>
 
     @Query("DELETE FROM members")
     suspend fun clear()

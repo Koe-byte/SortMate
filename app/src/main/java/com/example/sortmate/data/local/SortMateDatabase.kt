@@ -5,6 +5,8 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.sortmate.data.local.dao.BillDao
 import com.example.sortmate.data.local.dao.ChoreDao
 import com.example.sortmate.data.local.dao.HouseholdDao
@@ -21,7 +23,7 @@ import com.example.sortmate.data.local.entity.MemberEntity
         BillEntity::class,
         ChoreEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -35,11 +37,27 @@ abstract class SortMateDatabase : RoomDatabase() {
     companion object {
         private const val DATABASE_NAME = "sortmate.db"
 
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE households ADD COLUMN campusLatitude REAL",
+                )
+                database.execSQL(
+                    "ALTER TABLE households ADD COLUMN campusLongitude REAL",
+                )
+                database.execSQL(
+                    "ALTER TABLE households ADD COLUMN campusRadiusMeters REAL NOT NULL DEFAULT 100",
+                )
+            }
+        }
+
         fun build(context: Context): SortMateDatabase =
             Room.databaseBuilder(
                 context.applicationContext,
                 SortMateDatabase::class.java,
                 DATABASE_NAME,
-            ).build()
+            )
+                .addMigrations(MIGRATION_1_2)
+                .build()
     }
 }

@@ -281,7 +281,7 @@ fun OnboardingScreen(viewModel: OnboardingViewModel) {
 
                 Text(
                     text = if (state.mode == OnboardingMode.CREATE) {
-                        "Creates a household on this phone. Add Firebase later to sync with roommates."
+                        "Create a household for your roommates, or explore the local demo below."
                     } else {
                         "Ask a housemate for the code shown on their Household tab."
                     },

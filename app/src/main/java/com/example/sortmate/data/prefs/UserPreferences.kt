@@ -24,7 +24,10 @@ data class UserSession(
     val choreReminders: Boolean = true,
     val quietHoursAlerts: Boolean = true,
     val activityAlerts: Boolean = true,
-)
+    val cloudBacked: Boolean = false,
+) {
+    val cloudHouseholdId: String? get() = householdId?.takeIf { cloudBacked }
+}
 
 class UserPreferences(private val context: Context) {
 
@@ -33,6 +36,7 @@ class UserPreferences(private val context: Context) {
         val HOUSEHOLD_ID = stringPreferencesKey("household_id")
         val DISPLAY_NAME = stringPreferencesKey("display_name")
         val ONBOARDING_COMPLETE = booleanPreferencesKey("onboarding_complete")
+        val CLOUD_BACKED = booleanPreferencesKey("cloud_backed")
         val BILL_REMINDERS = booleanPreferencesKey("bill_reminders")
         val CHORE_REMINDERS = booleanPreferencesKey("chore_reminders")
         val QUIET_HOURS_ALERTS = booleanPreferencesKey("quiet_hours_alerts")
@@ -53,15 +57,17 @@ class UserPreferences(private val context: Context) {
                 choreReminders = preferences[Keys.CHORE_REMINDERS] ?: true,
                 quietHoursAlerts = preferences[Keys.QUIET_HOURS_ALERTS] ?: true,
                 activityAlerts = preferences[Keys.ACTIVITY_ALERTS] ?: true,
+                cloudBacked = preferences[Keys.CLOUD_BACKED] ?: false,
             )
         }
 
-    suspend fun saveOnboarding(memberId: String, householdId: String, displayName: String) {
+    suspend fun saveOnboarding(memberId: String, householdId: String, displayName: String, cloudBacked: Boolean) {
         context.sessionDataStore.edit { preferences ->
             preferences[Keys.MEMBER_ID] = memberId
             preferences[Keys.HOUSEHOLD_ID] = householdId
             preferences[Keys.DISPLAY_NAME] = displayName
             preferences[Keys.ONBOARDING_COMPLETE] = true
+            preferences[Keys.CLOUD_BACKED] = cloudBacked
         }
     }
 

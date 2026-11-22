@@ -29,14 +29,25 @@ class BootReceiver : BroadcastReceiver() {
                 val session = container.userPreferences.session.first()
                 val householdId = session.householdId ?: return@launch
                 val household = container.householdRepository.getHousehold(householdId) ?: return@launch
-                val latitude = household.homeLatitude ?: return@launch
-                val longitude = household.homeLongitude ?: return@launch
                 if (hasBackgroundLocation(context)) {
-                    container.geofenceManager.registerHomeGeofence(
-                        latitude = latitude,
-                        longitude = longitude,
-                        radiusMeters = household.geofenceRadiusMeters,
-                    )
+                    household.homeLatitude?.let { latitude ->
+                        household.homeLongitude?.let { longitude ->
+                            container.geofenceManager.registerHomeGeofence(
+                                latitude = latitude,
+                                longitude = longitude,
+                                radiusMeters = household.geofenceRadiusMeters,
+                            )
+                        }
+                    }
+                    household.campusLatitude?.let { latitude ->
+                        household.campusLongitude?.let { longitude ->
+                            container.geofenceManager.registerCampusGeofence(
+                                latitude = latitude,
+                                longitude = longitude,
+                                radiusMeters = household.campusRadiusMeters,
+                            )
+                        }
+                    }
                 }
                 ReminderScheduler.scheduleQuietHours(
                     context,

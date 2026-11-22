@@ -2,15 +2,22 @@ package com.example.sortmate.data.repository
 
 import com.example.sortmate.data.local.dao.BillDao
 import com.example.sortmate.data.local.entity.BillEntity
-import com.example.sortmate.data.remote.FirestoreDataSource
+import com.example.sortmate.data.prefs.UserPreferences
+import com.example.sortmate.data.remote.RemoteDataSource
 import com.example.sortmate.domain.model.SplitType
+import com.example.sortmate.util.evaluationMark
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 
 class BillRepository(
     private val billDao: BillDao,
-    private val remote: FirestoreDataSource,
+    private val remote: RemoteDataSource,
+    private val preferences: UserPreferences,
 ) {
+    private val upload = Mutex()
 
     fun observeBills(householdId: String): Flow<List<BillEntity>> =
         billDao.observeBills(householdId)
@@ -41,28 +48,39 @@ class BillRepository(
             ocrConfidence = ocrConfidence,
         )
         billDao.upsert(bill)
-        if (remote.upsertBill(bill)) billDao.markSynced(id)
+        push(id)
         return id
     }
 
     suspend fun setSettled(bill: BillEntity, settled: Boolean) {
         val now = System.currentTimeMillis()
         billDao.setSettled(bill.id, settled, now)
-        val updated = bill.copy(isSettled = settled, updatedAt = now, isSynced = false)
-        if (remote.upsertBill(updated)) billDao.markSynced(updated.id)
+        push(bill.id)
     }
 
     suspend fun deleteBill(bill: BillEntity) {
         val now = System.currentTimeMillis()
         billDao.softDelete(bill.id, now)
-        val updated = bill.copy(isDeleted = true, updatedAt = now, isSynced = false)
-        if (remote.deleteBill(updated)) billDao.markSynced(updated.id)
+        push(bill.id)
     }
 
     suspend fun syncPending() {
-        billDao.getUnsynced().forEach { bill ->
-            val synced = if (bill.isDeleted) remote.deleteBill(bill) else remote.upsertBill(bill)
-            if (synced) billDao.markSynced(bill.id)
+        if (!remote.isAvailable) return
+        val householdId = preferences.session.first().cloudHouseholdId ?: return
+        billDao.getUnsynced(householdId).forEach { push(it.id) }
+    }
+
+    private suspend fun push(id: String) = upload.withLock {
+        val bill = billDao.get(id) ?: return@withLock
+        val session = preferences.session.first()
+        if (bill.isSynced || session.householdId != bill.householdId) return@withLock
+        if (!session.cloudBacked) {
+            billDao.markSynced(id, bill.updatedAt)
+            return@withLock
+        }
+        evaluationMark("bill_send id=$id")
+        if (remote.upsertBill(bill) && billDao.markSynced(id, bill.updatedAt) == 1) {
+            evaluationMark("bill_ack id=$id")
         }
     }
 }

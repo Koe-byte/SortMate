@@ -18,6 +18,19 @@ class GeofenceManager(private val context: Context) {
         latitude: Double,
         longitude: Double,
         radiusMeters: Float = 100f,
+    ): Result<Unit> = register(HOME_GEOFENCE_ID, latitude, longitude, radiusMeters)
+
+    suspend fun registerCampusGeofence(
+        latitude: Double,
+        longitude: Double,
+        radiusMeters: Float = 100f,
+    ): Result<Unit> = register(CAMPUS_GEOFENCE_ID, latitude, longitude, radiusMeters)
+
+    private suspend fun register(
+        requestId: String,
+        latitude: Double,
+        longitude: Double,
+        radiusMeters: Float,
     ): Result<Unit> = runCatching {
         check(hasFineLocation(context)) { "Allow precise location first." }
         check(hasBackgroundLocation(context)) {
@@ -25,7 +38,7 @@ class GeofenceManager(private val context: Context) {
         }
 
         val geofence = Geofence.Builder()
-            .setRequestId(HOME_GEOFENCE_ID)
+            .setRequestId(requestId)
             .setCircularRegion(latitude, longitude, radiusMeters)
             .setExpirationDuration(Geofence.NEVER_EXPIRE)
             .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER or Geofence.GEOFENCE_TRANSITION_EXIT)
@@ -40,8 +53,12 @@ class GeofenceManager(private val context: Context) {
         client.addGeofences(request, geofencePendingIntent()).await()
     }
 
-    fun removeHomeGeofence() {
-        client.removeGeofences(geofencePendingIntent())
+    suspend fun remove(requestId: String): Result<Unit> = runCatching {
+        client.removeGeofences(listOf(requestId)).await()
+    }
+
+    suspend fun removeAllGeofences(): Result<Unit> = runCatching {
+        client.removeGeofences(geofencePendingIntent()).await()
     }
 
     private fun geofencePendingIntent(): PendingIntent {
@@ -54,6 +71,7 @@ class GeofenceManager(private val context: Context) {
 
     companion object {
         const val HOME_GEOFENCE_ID = "sortmate-home"
+        const val CAMPUS_GEOFENCE_ID = "sortmate-campus"
         const val ACTION_GEOFENCE = "com.example.sortmate.action.GEOFENCE"
         private const val NOTIFICATION_RESPONSIVENESS_MS = 30_000
     }

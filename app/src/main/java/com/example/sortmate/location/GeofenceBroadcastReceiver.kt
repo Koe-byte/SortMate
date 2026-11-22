@@ -5,7 +5,10 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.example.sortmate.SortMateApplication
+import com.example.sortmate.domain.GeofenceArea
+import com.example.sortmate.domain.PresenceResolver
 import com.example.sortmate.domain.model.PresenceStatus
+import com.example.sortmate.util.evaluationMark
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingEvent
 import kotlinx.coroutines.CoroutineScope
@@ -22,11 +25,24 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             return
         }
 
-        val status = when (event.geofenceTransition) {
-            Geofence.GEOFENCE_TRANSITION_ENTER -> PresenceStatus.HOME
-            Geofence.GEOFENCE_TRANSITION_EXIT -> PresenceStatus.AWAY
-            else -> return
+        val entered = mutableSetOf<GeofenceArea>()
+        val exited = mutableSetOf<GeofenceArea>()
+        event.triggeringGeofences.orEmpty().forEach { geofence ->
+            val area = when (geofence.requestId) {
+                GeofenceManager.HOME_GEOFENCE_ID -> GeofenceArea.HOME
+                GeofenceManager.CAMPUS_GEOFENCE_ID -> GeofenceArea.CAMPUS
+                else -> null
+            } ?: return@forEach
+
+            when (event.geofenceTransition) {
+                Geofence.GEOFENCE_TRANSITION_ENTER -> entered += area
+                Geofence.GEOFENCE_TRANSITION_EXIT -> exited += area
+            }
         }
+
+        if (entered.isEmpty() && exited.isEmpty()) return
+
+        evaluationMark("geofence_event entered=$entered exited=$exited")
 
         val pendingResult = goAsync()
         val app = context.applicationContext as? SortMateApplication ?: run {
@@ -37,10 +53,15 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val container = app.container
-                container.householdRepository.updatePresence(status)
-                val session = container.userPreferences.session.first()
-                if (session.activityAlerts) {
-                    container.notificationHelper.showPresenceUpdate(status)
+                val current = container.householdRepository.getCurrentMember()?.status
+                    ?: PresenceStatus.AWAY
+                val next = PresenceResolver.resolve(current, entered, exited)
+                if (next != current) {
+                    container.householdRepository.updatePresence(next)
+                    val session = container.userPreferences.session.first()
+                    if (session.activityAlerts) {
+                        container.notificationHelper.showPresenceUpdate(next)
+                    }
                 }
             } catch (error: Exception) {
                 Log.e(TAG, "Could not persist geofence transition", error)

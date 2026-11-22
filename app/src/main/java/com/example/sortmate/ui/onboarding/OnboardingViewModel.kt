@@ -98,8 +98,7 @@ class OnboardingViewModel(
     private fun launchOperation(operation: suspend () -> Result<String>) {
         _state.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
-            // Room/Firebase/DataStore work must never run on the main thread; on a
-            // cold start this also opens the database and initializes Firebase.
+            // Opening the Room database on a cold start must stay off the main thread.
             withContext(Dispatchers.IO) { operation() }
                 .onSuccess {
                     // The DataStore session flips the root navigator. Clearing the

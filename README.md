@@ -85,6 +85,14 @@ $env:Path="$env:JAVA_HOME\bin;$env:Path"
 
 The APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 
+If Gradle selects a VS Code extension's JRE and reports `jlink.exe does not exist`, keep `JAVA_HOME` pointed at the **full JDK 25** above and run this once from PowerShell. It uses a fresh daemon with only that Java installation.
+
+```powershell
+.\gradlew.bat :app:assembleDebug --no-daemon --max-workers=2 `
+  '-Porg.gradle.java.installations.auto-detect=false' "-Porg.gradle.java.installations.paths=$env:JAVA_HOME" `
+  '-Dorg.gradle.java.installations.auto-detect=false' "-Dorg.gradle.java.installations.paths=$env:JAVA_HOME"
+```
+
 Open the project in Android Studio and press **Run**, or install with:
 
 ```powershell

@@ -13,6 +13,7 @@
 
 - Rehearse the 7–8 minute demo.
 - Two-device sync + push + campus walkthrough.
-- Record a backup video and keep the APK.
+- Record a backup video. The checksummed local APK is listed in [the defense handoff](../../../docs/05%20-%20Defense.md).
+- Complete independent branch review before merge; the requested separate reviewers hit their usage limit.
 - Wake the Supabase project and warm the Edge Function before presenting.
 - Final submission checklist.

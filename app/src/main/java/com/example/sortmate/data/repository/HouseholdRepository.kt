@@ -11,7 +11,7 @@ import com.example.sortmate.data.local.entity.ChoreEntity
 import com.example.sortmate.data.local.entity.HouseholdEntity
 import com.example.sortmate.data.local.entity.MemberEntity
 import com.example.sortmate.data.prefs.UserPreferences
-import com.example.sortmate.data.remote.FirestoreDataSource
+import com.example.sortmate.data.remote.RemoteDataSource
 import com.example.sortmate.domain.model.PresenceStatus
 import com.example.sortmate.domain.model.SplitType
 import com.example.sortmate.util.daysFromNow
@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 
 class HouseholdRepository(
@@ -29,11 +31,12 @@ class HouseholdRepository(
     private val billDao: BillDao,
     private val choreDao: ChoreDao,
     private val preferences: UserPreferences,
-    private val remote: FirestoreDataSource,
+    private val remote: RemoteDataSource,
     private val auth: AuthRepository,
 ) {
 
     val session = preferences.session
+    private val upload = Mutex()
 
     fun observeHousehold(householdId: String): Flow<HouseholdEntity?> =
         householdDao.observe(householdId)
@@ -41,6 +44,7 @@ class HouseholdRepository(
     fun observeMembers(householdId: String): Flow<List<MemberEntity>> =
         memberDao.observeMembers(householdId)
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     fun observeCurrentMember(): Flow<MemberEntity?> =
         preferences.session.flatMapLatest { current ->
             current.memberId?.let(memberDao::observeMember) ?: flowOf(null)
@@ -60,9 +64,17 @@ class HouseholdRepository(
         quietStartMinutes: Int = 22 * 60,
         quietEndMinutes: Int = 6 * 60,
     ): Result<String> = runCatching {
-        val memberId = auth.ensureUserId() ?: localMemberId()
+        val cloudUserId = auth.ensureUserId()
+        if (remote.isAvailable) {
+            check(cloudUserId != null) {
+                "Cloud sign-in is unavailable. Check your connection and try again."
+            }
+        }
+
+        val memberId = cloudUserId ?: localMemberId()
         val householdId = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
+        val name = displayName.trim().ifBlank { "Roommate" }
         val household = HouseholdEntity(
             id = householdId,
             name = householdName.trim().ifBlank { "Our household" },
@@ -70,32 +82,39 @@ class HouseholdRepository(
             quietStartMinutes = quietStartMinutes,
             quietEndMinutes = quietEndMinutes,
             updatedAt = now,
+            isSynced = true,
         )
         val member = MemberEntity(
             id = memberId,
             householdId = householdId,
-            name = displayName.trim().ifBlank { "Roommate" },
+            name = name,
             role = "Leader",
             status = PresenceStatus.HOME,
             updatedAt = now,
+            isSynced = true,
         )
+
+        if (remote.isAvailable) {
+            check(remote.createHousehold(household, member)) {
+                "Supabase could not create the household. Check your connection and try again."
+            }
+        }
 
         database.withTransaction {
             householdDao.upsert(household)
             memberDao.upsert(member)
         }
-        preferences.saveOnboarding(memberId, householdId, member.name)
-        pushHousehold(household)
-        pushMember(member)
+        preferences.saveOnboarding(memberId, householdId, name, cloudBacked = remote.isAvailable)
         householdId
     }
 
     /**
      * Seeds a fully populated local household so the pipeline can be demonstrated
-     * even without Firebase or a second phone.
+     * without a second phone or a network connection. Demo data never touches
+     * Supabase, so it cannot pollute a real household.
      */
     suspend fun createDemoHousehold(displayName: String): Result<String> = runCatching {
-        val memberId = auth.ensureUserId() ?: localMemberId()
+        val memberId = localMemberId()
         val householdId = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
         val name = displayName.trim().ifBlank { "Nash" }
@@ -108,6 +127,7 @@ class HouseholdRepository(
             quietEndMinutes = 6 * 60,
             geofenceRadiusMeters = 120f,
             updatedAt = now,
+            isSynced = true,
         )
         val me = MemberEntity(
             id = memberId,
@@ -116,6 +136,7 @@ class HouseholdRepository(
             role = "Leader / Backend",
             status = PresenceStatus.HOME,
             updatedAt = now,
+            isSynced = true,
         )
         val kotnie = MemberEntity(
             id = "$householdId-member-kotnie",
@@ -124,6 +145,7 @@ class HouseholdRepository(
             role = "UI / UX",
             status = PresenceStatus.CAMPUS,
             updatedAt = now,
+            isSynced = true,
         )
         val romelie = MemberEntity(
             id = "$householdId-member-romelie",
@@ -132,6 +154,7 @@ class HouseholdRepository(
             role = "Documentation",
             status = PresenceStatus.AWAY,
             updatedAt = now,
+            isSynced = true,
         )
         val participants = listOf(me.id, kotnie.id, romelie.id)
 
@@ -148,6 +171,7 @@ class HouseholdRepository(
                 dueAt = daysFromNow(2),
                 createdAt = now - 86_400_000L,
                 ocrConfidence = 94,
+                isSynced = true,
             ),
             BillEntity(
                 id = UUID.randomUUID().toString(),
@@ -159,6 +183,7 @@ class HouseholdRepository(
                 splitAmongMemberIds = participants,
                 dueAt = daysFromNow(5),
                 createdAt = now - 172_800_000L,
+                isSynced = true,
             ),
             BillEntity(
                 id = UUID.randomUUID().toString(),
@@ -171,6 +196,7 @@ class HouseholdRepository(
                 dueAt = daysFromNow(-3),
                 createdAt = now - 604_800_000L,
                 isSettled = true,
+                isSynced = true,
             ),
         )
 
@@ -182,6 +208,7 @@ class HouseholdRepository(
                 assignedMemberId = kotnie.id,
                 dueAt = daysFromNow(0),
                 createdAt = now - 43_200_000L,
+                isSynced = true,
             ),
             ChoreEntity(
                 id = UUID.randomUUID().toString(),
@@ -190,6 +217,7 @@ class HouseholdRepository(
                 assignedMemberId = romelie.id,
                 dueAt = daysFromNow(1),
                 createdAt = now - 43_200_000L,
+                isSynced = true,
             ),
             ChoreEntity(
                 id = UUID.randomUUID().toString(),
@@ -197,6 +225,7 @@ class HouseholdRepository(
                 title = "Buy dish soap",
                 assignedMemberId = me.id,
                 createdAt = now - 21_600_000L,
+                isSynced = true,
             ),
         )
 
@@ -206,63 +235,61 @@ class HouseholdRepository(
             billDao.upsertAll(bills)
             choreDao.upsertAll(chores)
         }
-        preferences.saveOnboarding(memberId, householdId, name)
-
-        pushHousehold(household)
-        listOf(me, kotnie, romelie).forEach { pushMember(it) }
-        bills.forEach { bill -> if (remote.upsertBill(bill)) billDao.markSynced(bill.id) }
-        chores.forEach { chore -> if (remote.upsertChore(chore)) choreDao.markSynced(chore.id) }
+        preferences.saveOnboarding(memberId, householdId, name, cloudBacked = false)
         householdId
     }
 
     suspend fun joinHousehold(joinCode: String, displayName: String): Result<String> = runCatching {
         val code = normalizedJoinCode(joinCode)
         require(code.length == 6) { "Enter the 6-character household code." }
-        val household = remote.findHouseholdByCode(code)
-            ?: error("No household found. Check the code and your Firebase connection.")
+        check(remote.isAvailable) {
+            "Cloud sync is not configured. Use the demo household or add Supabase credentials."
+        }
+
         val memberId = auth.ensureUserId()
-            ?: error("Firebase sign-in is unavailable. Create a local household instead.")
-        val now = System.currentTimeMillis()
-        val member = MemberEntity(
-            id = memberId,
-            householdId = household.id,
-            name = displayName.trim().ifBlank { "Roommate" },
-            role = "Roommate",
-            status = PresenceStatus.HOME,
-            updatedAt = now,
-        )
-        val remoteMembers = remote.fetchMembers(household.id).filterNot { it.id == memberId }
-        val remoteBills = remote.fetchBills(household.id)
-        val remoteChores = remote.fetchChores(household.id)
+            ?: error("Cloud sign-in is unavailable. Check your connection and try again.")
+        val snapshot = remote.joinHousehold(code, memberId, displayName)
+            ?: error("No household found for that code. Check the code and your connection.")
+
+        val name = displayName.trim().ifBlank { "Roommate" }
+        val me = snapshot.members.firstOrNull { it.id == memberId }
+            ?: MemberEntity(
+                id = memberId,
+                householdId = snapshot.household.id,
+                name = name,
+                role = "Roommate",
+                status = PresenceStatus.HOME,
+                updatedAt = System.currentTimeMillis(),
+                isSynced = true,
+            )
 
         database.withTransaction {
-            householdDao.upsert(household)
-            memberDao.upsert(member)
-            memberDao.upsertAll(remoteMembers)
-            billDao.upsertAll(remoteBills)
-            choreDao.upsertAll(remoteChores)
+            householdDao.upsert(snapshot.household.copy(isSynced = true))
+            memberDao.upsertAll(snapshot.members.filterNot { it.id == memberId } + me)
+            if (snapshot.bills.isNotEmpty()) billDao.upsertAll(snapshot.bills)
+            if (snapshot.chores.isNotEmpty()) choreDao.upsertAll(snapshot.chores)
         }
-        preferences.saveOnboarding(memberId, household.id, member.name)
-        pushMember(member)
-        household.id
+        preferences.saveOnboarding(memberId, snapshot.household.id, me.name, cloudBacked = true)
+        snapshot.household.id
     }
 
     suspend fun updatePresence(status: PresenceStatus) {
         val current = preferences.session.first()
         val memberId = current.memberId ?: return
-        val member = memberDao.get(memberId) ?: return
         val now = System.currentTimeMillis()
         memberDao.updateStatus(memberId, status, now)
-        pushMember(member.copy(status = status, updatedAt = now, isSynced = false))
+        pushMember(memberId)
     }
 
     suspend fun updateFcmToken(token: String) {
         val current = preferences.session.first()
+        if (!current.cloudBacked) return
         val memberId = current.memberId ?: return
         val member = memberDao.get(memberId) ?: return
+        if (member.fcmToken == token) return
         val now = System.currentTimeMillis()
         memberDao.updateFcmToken(memberId, token, now)
-        pushMember(member.copy(fcmToken = token, updatedAt = now, isSynced = false))
+        pushMember(memberId)
     }
 
     suspend fun setQuietHours(startMinutes: Int, endMinutes: Int) {
@@ -270,7 +297,7 @@ class HouseholdRepository(
         val householdId = current.householdId ?: return
         val now = System.currentTimeMillis()
         householdDao.updateQuietHours(householdId, startMinutes, endMinutes, now)
-        householdDao.get(householdId)?.let { pushHousehold(it) }
+        pushHousehold(householdId)
     }
 
     suspend fun saveHomeGeofence(latitude: Double, longitude: Double, radiusMeters: Float) {
@@ -278,33 +305,52 @@ class HouseholdRepository(
         val householdId = current.householdId ?: return
         val now = System.currentTimeMillis()
         householdDao.updateHomeGeofence(householdId, latitude, longitude, radiusMeters, now)
-        householdDao.get(householdId)?.let { pushHousehold(it) }
+        pushHousehold(householdId)
+    }
+
+    suspend fun saveCampusGeofence(latitude: Double, longitude: Double, radiusMeters: Float) {
+        val current = preferences.session.first()
+        val householdId = current.householdId ?: return
+        val now = System.currentTimeMillis()
+        householdDao.updateCampusGeofence(householdId, latitude, longitude, radiusMeters, now)
+        pushHousehold(householdId)
     }
 
     suspend fun updateHouseholdName(name: String) {
         val current = preferences.session.first()
         val householdId = current.householdId ?: return
-        householdDao.updateName(householdId, name.trim().ifBlank { "Our household" }, System.currentTimeMillis())
-        householdDao.get(householdId)?.let { pushHousehold(it) }
+        householdDao.updateName(
+            householdId,
+            name.trim().ifBlank { "Our household" },
+            System.currentTimeMillis(),
+        )
+        pushHousehold(householdId)
     }
 
     suspend fun syncPending() {
-        householdDao.getUnsynced().forEach { pushHousehold(it) }
-        memberDao.getUnsynced().forEach { pushMember(it) }
+        if (!remote.isAvailable) return
+        val householdId = preferences.session.first().cloudHouseholdId ?: return
+        pushHousehold(householdId)
+        memberDao.getUnsynced(householdId).forEach { pushMember(it.id) }
     }
 
-    /** Pulls a fresh snapshot when the background sync worker runs. */
+    /**
+     * Pulls a fresh snapshot when the app reconnects or the worker runs.
+     * A newer local row that is still waiting in the outbox wins, so a slow
+     * upload is never overwritten by the previous server state.
+     */
     suspend fun refreshFromRemote() {
-        val householdId = preferences.session.first().householdId ?: return
+        if (!remote.isAvailable) return
+        val householdId = preferences.session.first().cloudHouseholdId ?: return
         val household = remote.fetchHousehold(householdId) ?: return
         val members = remote.fetchMembers(householdId)
         val bills = remote.fetchBills(householdId)
         val chores = remote.fetchChores(householdId)
         database.withTransaction {
-            householdDao.upsert(household)
-            if (members.isNotEmpty()) memberDao.upsertAll(members)
-            if (bills.isNotEmpty()) billDao.upsertAll(bills)
-            if (chores.isNotEmpty()) choreDao.upsertAll(chores)
+            householdDao.mergeRemote(household)
+            members.forEach { memberDao.mergeRemote(it) }
+            bills.forEach { billDao.mergeRemote(it) }
+            chores.forEach { choreDao.mergeRemote(it) }
         }
     }
 
@@ -318,12 +364,22 @@ class HouseholdRepository(
         preferences.clear()
     }
 
-    private suspend fun pushHousehold(household: HouseholdEntity) {
-        if (remote.upsertHousehold(household)) householdDao.markSynced(household.id)
+    private suspend fun pushHousehold(id: String) = upload.withLock {
+        val household = householdDao.get(id) ?: return@withLock
+        val session = preferences.session.first()
+        if (household.isSynced || session.householdId != id) return@withLock
+        if (!session.cloudBacked || remote.upsertHousehold(household)) {
+            householdDao.markSynced(household.id, household.updatedAt)
+        }
     }
 
-    private suspend fun pushMember(member: MemberEntity) {
-        if (remote.upsertMember(member)) memberDao.markSynced(member.id)
+    private suspend fun pushMember(id: String) = upload.withLock {
+        val member = memberDao.get(id) ?: return@withLock
+        val session = preferences.session.first()
+        if (member.isSynced || session.householdId != member.householdId || session.memberId != id) return@withLock
+        if (!session.cloudBacked || remote.upsertMember(member)) {
+            memberDao.markSynced(member.id, member.updatedAt)
+        }
     }
 
     private fun localMemberId(): String = "local-${UUID.randomUUID()}"

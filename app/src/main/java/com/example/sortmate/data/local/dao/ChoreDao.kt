@@ -2,6 +2,7 @@ package com.example.sortmate.data.local.dao
 
 import androidx.room.Dao
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Upsert
 import com.example.sortmate.data.local.entity.ChoreEntity
 import kotlinx.coroutines.flow.Flow
@@ -23,6 +24,11 @@ interface ChoreDao {
 
     @Upsert
     suspend fun upsert(chore: ChoreEntity)
+
+    @Transaction
+    suspend fun mergeRemote(chore: ChoreEntity) {
+        if (get(chore.id)?.isSynced != false) upsert(chore)
+    }
 
     @Upsert
     suspend fun upsertAll(chores: List<ChoreEntity>)
@@ -53,14 +59,14 @@ interface ChoreDao {
     )
     suspend fun softDelete(id: String, now: Long)
 
-    @Query("SELECT * FROM chores WHERE householdId = :householdId AND isCompleted = 0 AND dueAt BETWEEN :from AND :to")
+    @Query("SELECT * FROM chores WHERE householdId = :householdId AND isDeleted = 0 AND isCompleted = 0 AND dueAt BETWEEN :from AND :to")
     suspend fun getDueBetween(householdId: String, from: Long, to: Long): List<ChoreEntity>
 
-    @Query("SELECT * FROM chores WHERE isSynced = 0")
-    suspend fun getUnsynced(): List<ChoreEntity>
+    @Query("SELECT * FROM chores WHERE householdId = :householdId AND isSynced = 0")
+    suspend fun getUnsynced(householdId: String): List<ChoreEntity>
 
-    @Query("UPDATE chores SET isSynced = 1 WHERE id = :id")
-    suspend fun markSynced(id: String)
+    @Query("UPDATE chores SET isSynced = 1 WHERE id = :id AND updatedAt = :version")
+    suspend fun markSynced(id: String, version: Long)
 
     @Query("DELETE FROM chores")
     suspend fun clear()

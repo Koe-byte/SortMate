@@ -2,6 +2,7 @@ package com.example.sortmate.data.local.dao
 
 import androidx.room.Dao
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Upsert
 import com.example.sortmate.data.local.entity.BillEntity
 import kotlinx.coroutines.flow.Flow
@@ -24,6 +25,11 @@ interface BillDao {
     @Upsert
     suspend fun upsert(bill: BillEntity)
 
+    @Transaction
+    suspend fun mergeRemote(bill: BillEntity) {
+        if (get(bill.id)?.isSynced != false) upsert(bill)
+    }
+
     @Upsert
     suspend fun upsertAll(bills: List<BillEntity>)
 
@@ -45,14 +51,14 @@ interface BillDao {
     )
     suspend fun softDelete(id: String, now: Long)
 
-    @Query("SELECT * FROM bills WHERE householdId = :householdId AND isSettled = 0 AND dueAt BETWEEN :from AND :to")
+    @Query("SELECT * FROM bills WHERE householdId = :householdId AND isDeleted = 0 AND isSettled = 0 AND dueAt BETWEEN :from AND :to")
     suspend fun getDueBetween(householdId: String, from: Long, to: Long): List<BillEntity>
 
-    @Query("SELECT * FROM bills WHERE isSynced = 0")
-    suspend fun getUnsynced(): List<BillEntity>
+    @Query("SELECT * FROM bills WHERE householdId = :householdId AND isSynced = 0")
+    suspend fun getUnsynced(householdId: String): List<BillEntity>
 
-    @Query("UPDATE bills SET isSynced = 1 WHERE id = :id")
-    suspend fun markSynced(id: String)
+    @Query("UPDATE bills SET isSynced = 1 WHERE id = :id AND updatedAt = :version")
+    suspend fun markSynced(id: String, version: Long): Int
 
     @Query("DELETE FROM bills")
     suspend fun clear()

@@ -1,23 +1,28 @@
 package com.example.sortmate.data.repository
 
 import android.util.Log
-import com.google.firebase.auth.FirebaseAuth
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.tasks.await
-import kotlinx.coroutines.withContext
+import io.github.jan.supabase.SupabaseClient
+import io.github.jan.supabase.auth.auth
 
 /**
- * Uses Firebase Anonymous Auth so several devices can share a household without
- * building a full account system. Falls back to null when Firebase is not set up.
+ * Supabase anonymous auth gives every install a stable `auth.uid()` without an
+ * account form. The uid doubles as `members.id`, which keeps RLS simple.
+ *
+ * The auth plugin persists the session in SharedPreferences, so a cold start
+ * restores the same uid before the first network call.
  */
-class AuthRepository(private val firebaseAvailable: Boolean) {
+class AuthRepository(private val client: SupabaseClient?) {
 
-    suspend fun ensureUserId(): String? = withContext(Dispatchers.IO) {
-        if (!firebaseAvailable) return@withContext null
-        runCatching {
-            val auth = FirebaseAuth.getInstance()
-            val user = auth.currentUser ?: auth.signInAnonymously().await().user
-            user?.uid
+    val isAvailable: Boolean get() = client != null
+
+    suspend fun ensureUserId(): String? {
+        val supabase = client ?: return null
+        return runCatching {
+            supabase.auth.awaitInitialization()
+            supabase.auth.currentUserOrNull()?.id ?: run {
+                supabase.auth.signInAnonymously()
+                supabase.auth.currentUserOrNull()?.id
+            }
         }.onFailure { Log.w(TAG, "Anonymous sign-in unavailable", it) }.getOrNull()
     }
 

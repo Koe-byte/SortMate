@@ -7,6 +7,7 @@ import com.example.sortmate.data.local.entity.MemberEntity
 import com.example.sortmate.data.prefs.UserPreferences
 import com.example.sortmate.di.AppContainer
 import com.example.sortmate.domain.model.PresenceStatus
+import com.example.sortmate.location.GeofenceManager
 import com.example.sortmate.location.hasFineLocation
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,13 +29,18 @@ enum class NotificationSetting {
     ACTIVITY,
 }
 
+enum class LocationTarget {
+    HOME,
+    CAMPUS,
+}
+
 data class HouseholdUiState(
     val loading: Boolean = true,
     val household: HouseholdEntity? = null,
     val members: List<MemberEntity> = emptyList(),
     val currentMember: MemberEntity? = null,
     val displayName: String = "",
-    val firebaseAvailable: Boolean = false,
+    val cloudAvailable: Boolean = false,
     val isLocating: Boolean = false,
     val billReminders: Boolean = true,
     val choreReminders: Boolean = true,
@@ -74,7 +80,7 @@ class HouseholdViewModel(
                         members = members,
                         currentMember = members.firstOrNull { it.id == session.memberId },
                         displayName = session.displayName.orEmpty(),
-                        firebaseAvailable = container.firebaseAvailable,
+                        cloudAvailable = session.cloudBacked && container.supabaseAvailable,
                         isLocating = locating,
                         billReminders = session.billReminders,
                         choreReminders = session.choreReminders,
@@ -87,7 +93,7 @@ class HouseholdViewModel(
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = HouseholdUiState(firebaseAvailable = container.firebaseAvailable),
+            initialValue = HouseholdUiState(cloudAvailable = container.supabaseAvailable),
         )
 
     fun updatePresence(status: PresenceStatus) {
@@ -102,7 +108,7 @@ class HouseholdViewModel(
             repository.updatePresence(status)
             val session = preferences.session.first()
             if (session.activityAlerts) container.notificationHelper.showPresenceUpdate(status)
-            _message.value = "Simulated geofence ${if (status == PresenceStatus.HOME) "arrival" else "exit"}."
+            _message.value = "Simulated presence: ${status.label}."
         }
     }
 
@@ -136,7 +142,7 @@ class HouseholdViewModel(
         }
     }
 
-    fun useCurrentLocation() {
+    fun useCurrentLocation(target: LocationTarget) {
         if (_isLocating.value) return
         viewModelScope.launch {
             if (!hasFineLocation(container.appContext)) {
@@ -151,17 +157,37 @@ class HouseholdViewModel(
                     return@launch
                 }
                 val household = uiState.value.household ?: return@launch
-                repository.saveHomeGeofence(
-                    latitude = location.latitude,
-                    longitude = location.longitude,
-                    radiusMeters = household.geofenceRadiusMeters,
-                )
-                container.geofenceManager.registerHomeGeofence(
-                    latitude = location.latitude,
-                    longitude = location.longitude,
-                    radiusMeters = household.geofenceRadiusMeters,
-                ).onSuccess {
-                    _message.value = "Home boundary saved and geofence registered."
+                val radius = when (target) {
+                    LocationTarget.HOME -> household.geofenceRadiusMeters
+                    LocationTarget.CAMPUS -> household.campusRadiusMeters
+                }
+                when (target) {
+                    LocationTarget.HOME -> repository.saveHomeGeofence(
+                        latitude = location.latitude,
+                        longitude = location.longitude,
+                        radiusMeters = radius,
+                    )
+                    LocationTarget.CAMPUS -> repository.saveCampusGeofence(
+                        latitude = location.latitude,
+                        longitude = location.longitude,
+                        radiusMeters = radius,
+                    )
+                }
+                val registration = when (target) {
+                    LocationTarget.HOME -> container.geofenceManager.registerHomeGeofence(
+                        latitude = location.latitude,
+                        longitude = location.longitude,
+                        radiusMeters = radius,
+                    )
+                    LocationTarget.CAMPUS -> container.geofenceManager.registerCampusGeofence(
+                        latitude = location.latitude,
+                        longitude = location.longitude,
+                        radiusMeters = radius,
+                    )
+                }
+                val label = if (target == LocationTarget.HOME) "Home" else "Campus"
+                registration.onSuccess {
+                    _message.value = "$label boundary saved and geofence registered."
                 }.onFailure { error ->
                     _message.value = error.message
                         ?: "Boundary saved, but the geofence could not be registered."
@@ -172,26 +198,34 @@ class HouseholdViewModel(
         }
     }
 
-    fun registerSavedGeofence() {
+    fun registerSavedGeofence(target: LocationTarget) {
         val household = uiState.value.household ?: return
-        val latitude = household.homeLatitude ?: return
-        val longitude = household.homeLongitude ?: return
         viewModelScope.launch {
-            container.geofenceManager.registerHomeGeofence(
-                latitude = latitude,
-                longitude = longitude,
-                radiusMeters = household.geofenceRadiusMeters,
-            ).onSuccess {
-                _message.value = "Geofence refreshed."
-            }.onFailure { error ->
-                _message.value = error.message ?: "Could not register the geofence."
+            val result = when (target) {
+                LocationTarget.HOME -> container.geofenceManager.registerHomeGeofence(
+                    household.homeLatitude ?: return@launch, household.homeLongitude ?: return@launch,
+                    household.geofenceRadiusMeters,
+                )
+                LocationTarget.CAMPUS -> container.geofenceManager.registerCampusGeofence(
+                    household.campusLatitude ?: return@launch, household.campusLongitude ?: return@launch,
+                    household.campusRadiusMeters,
+                )
             }
+            _message.value = result.fold({ "Geofence refreshed." }, { it.message ?: "Could not register geofence." })
         }
     }
 
-    fun removeGeofence() {
-        container.geofenceManager.removeHomeGeofence()
-        _message.value = "Geofence removed. Background status updates are off."
+    fun removeGeofence(target: LocationTarget) {
+        val id = when (target) {
+            LocationTarget.HOME -> GeofenceManager.HOME_GEOFENCE_ID
+            LocationTarget.CAMPUS -> GeofenceManager.CAMPUS_GEOFENCE_ID
+        }
+        viewModelScope.launch {
+            _message.value = container.geofenceManager.remove(id).fold(
+                { "Fence unregistered on this phone until refreshed or restarted after boot." },
+                { it.message ?: "Could not remove the fence." },
+            )
+        }
     }
 
     fun updateHouseholdName(name: String) {
@@ -203,6 +237,7 @@ class HouseholdViewModel(
 
     fun resetLocalData() {
         viewModelScope.launch {
+            container.geofenceManager.removeAllGeofences()
             repository.resetLocalData()
             _message.value = null
         }

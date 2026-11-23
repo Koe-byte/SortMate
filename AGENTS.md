@@ -2,7 +2,13 @@
 
 ## Project
 
-SortMate is a native Android app (Kotlin, Jetpack Compose, Room, Firebase) for student households. See `README.md` and `docs/ARCHITECTURE.md`.
+SortMate is a Kotlin/Compose Android app for student households. Room feeds the UI; Supabase provides auth, data and Realtime; FCM delivers push. Start at `docs/00 - SortMate.md`.
+
+## Agent skills
+
+- **Code relationships:** if `graphify-out/graph.json` exists, query it before reading broad source ranges (`graphify query "<question>" --budget 1500`, `graphify path`, `graphify explain`). See `docs/agents/graph-navigation.md` for rebuilds and coverage.
+- **Tickets:** use the local Markdown tracker (`docs/agents/issue-tracker.md`); for triage use `docs/agents/triage-labels.md`.
+- **Domain decisions:** use the single glossary and ADRs described in `docs/agents/domain.md`.
 
 ## Git conventions
 

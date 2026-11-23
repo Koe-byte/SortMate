@@ -86,6 +86,7 @@ fun HouseholdScreen(viewModel: HouseholdViewModel) {
     var showRename by remember { mutableStateOf(false) }
     var showQuietHours by remember { mutableStateOf(false) }
     var showReset by remember { mutableStateOf(false) }
+    var pendingLocationTarget by remember { mutableStateOf(LocationTarget.HOME) }
 
     val household = state.household
     val fineLocationLauncher = rememberLauncherForActivityResult(
@@ -93,7 +94,7 @@ fun HouseholdScreen(viewModel: HouseholdViewModel) {
     ) { grants ->
         val granted = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
             hasFineLocation(context)
-        if (granted) viewModel.useCurrentLocation()
+        if (granted) viewModel.useCurrentLocation(pendingLocationTarget)
     }
 
     LaunchedEffect(message) {
@@ -112,11 +113,11 @@ fun HouseholdScreen(viewModel: HouseholdViewModel) {
                 ScreenHeader(
                     title = "Household",
                     eyebrow = "Home base",
-                    subtitle = "Roommates, quiet hours, and the home geofence",
+                    subtitle = "Roommates, quiet hours, and home + campus geofences",
                 )
             }
 
-            if (!state.firebaseAvailable) {
+            if (!state.cloudAvailable) {
                 item {
                     Row(
                         modifier = Modifier
@@ -141,7 +142,7 @@ fun HouseholdScreen(viewModel: HouseholdViewModel) {
                                 style = MaterialTheme.typography.titleMedium,
                             )
                             Text(
-                                text = "Add app/google-services.json and rebuild to sync with roommates in real time.",
+                                text = "This household is on this phone. Create or join a Supabase household to sync with roommates.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -202,12 +203,19 @@ fun HouseholdScreen(viewModel: HouseholdViewModel) {
             item {
                 Column(modifier = Modifier.padding(horizontal = 20.dp)) {
                     LocationCard(
-                        household = household,
+                        title = "Home geofence",
+                        latitude = household?.homeLatitude,
+                        longitude = household?.homeLongitude,
+                        radiusMeters = household?.geofenceRadiusMeters ?: 100f,
+                        emptyText = "No home boundary yet. Stand at home, then save your current location. " +
+                            "Background location permission is required for automatic updates.",
+                        statusText = "Entering marks you At home; leaving marks you Away unless you are on campus.",
                         isLocating = state.isLocating,
                         onUseCurrentLocation = {
                             if (hasFineLocation(context)) {
-                                viewModel.useCurrentLocation()
+                                viewModel.useCurrentLocation(LocationTarget.HOME)
                             } else {
+                                pendingLocationTarget = LocationTarget.HOME
                                 fineLocationLauncher.launch(
                                     arrayOf(
                                         android.Manifest.permission.ACCESS_FINE_LOCATION,
@@ -216,8 +224,8 @@ fun HouseholdScreen(viewModel: HouseholdViewModel) {
                                 )
                             }
                         },
-                        onRefreshGeofence = viewModel::registerSavedGeofence,
-                        onRemoveGeofence = viewModel::removeGeofence,
+                        onRefreshGeofence = { viewModel.registerSavedGeofence(LocationTarget.HOME) },
+                        onRemoveGeofence = { viewModel.removeGeofence(LocationTarget.HOME) },
                         onOpenSettings = {
                             context.startActivity(
                                 Intent(
@@ -226,8 +234,50 @@ fun HouseholdScreen(viewModel: HouseholdViewModel) {
                                 ),
                             )
                         },
-                        onSimulateArrival = { viewModel.simulateBoundary(com.example.sortmate.domain.model.PresenceStatus.HOME) },
-                        onSimulateExit = { viewModel.simulateBoundary(com.example.sortmate.domain.model.PresenceStatus.AWAY) },
+                        onSimulateHome = { viewModel.simulateBoundary(com.example.sortmate.domain.model.PresenceStatus.HOME) },
+                        onSimulateCampus = { viewModel.simulateBoundary(com.example.sortmate.domain.model.PresenceStatus.CAMPUS) },
+                        onSimulateAway = { viewModel.simulateBoundary(com.example.sortmate.domain.model.PresenceStatus.AWAY) },
+                        showDemo = true,
+                    )
+
+                    Spacer(Modifier.height(14.dp))
+
+                    LocationCard(
+                        title = "Campus geofence",
+                        latitude = household?.campusLatitude,
+                        longitude = household?.campusLongitude,
+                        radiusMeters = household?.campusRadiusMeters ?: 100f,
+                        emptyText = "No campus boundary yet. Stand at your usual campus spot, then save it here. " +
+                            "Entering marks you On campus; leaving marks you Away unless you are home.",
+                        statusText = "Campus and home boundaries work together, so crossing one does not hide the other.",
+                        isLocating = state.isLocating,
+                        onUseCurrentLocation = {
+                            if (hasFineLocation(context)) {
+                                viewModel.useCurrentLocation(LocationTarget.CAMPUS)
+                            } else {
+                                pendingLocationTarget = LocationTarget.CAMPUS
+                                fineLocationLauncher.launch(
+                                    arrayOf(
+                                        android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                        android.Manifest.permission.ACCESS_COARSE_LOCATION,
+                                    ),
+                                )
+                            }
+                        },
+                        onRefreshGeofence = { viewModel.registerSavedGeofence(LocationTarget.CAMPUS) },
+                        onRemoveGeofence = { viewModel.removeGeofence(LocationTarget.CAMPUS) },
+                        onOpenSettings = {
+                            context.startActivity(
+                                Intent(
+                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.fromParts("package", context.packageName, null),
+                                ),
+                            )
+                        },
+                        onSimulateHome = {},
+                        onSimulateCampus = {},
+                        onSimulateAway = {},
+                        showDemo = false,
                     )
                 }
             }
@@ -288,7 +338,7 @@ fun HouseholdScreen(viewModel: HouseholdViewModel) {
                         SectionTitle(title = "Danger zone")
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = "Resetting removes the local household, bills, chores, and session. Firestore data is untouched.",
+                            text = "Resetting removes the local household, bills, chores, and session. Supabase data is untouched.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -361,7 +411,7 @@ fun HouseholdScreen(viewModel: HouseholdViewModel) {
             onDismissRequest = { showReset = false },
             title = { Text("Reset everything?") },
             text = {
-                Text("This clears the local household and returns to onboarding. Cloud data stays in Firestore.")
+                Text("This clears the local household and returns to onboarding. Cloud data stays in Supabase.")
             },
             confirmButton = {
                 TextButton(
@@ -410,7 +460,8 @@ private fun HouseholdCodeCard(
                     )
                     Text(
                         text = "$memberCount roommate${if (memberCount == 1) "" else "s"} · " +
-                            "${household.geofenceRadiusMeters.toInt()} m home radius",
+                            "${household.geofenceRadiusMeters.toInt()} m home · " +
+                            "${household.campusRadiusMeters.toInt()} m campus",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f),
                     )
@@ -505,21 +556,28 @@ private fun MemberRow(member: MemberEntity, isCurrent: Boolean) {
 
 @Composable
 private fun LocationCard(
-    household: HouseholdEntity?,
+    title: String,
+    latitude: Double?,
+    longitude: Double?,
+    radiusMeters: Float,
+    emptyText: String,
+    statusText: String,
     isLocating: Boolean,
     onUseCurrentLocation: () -> Unit,
     onRefreshGeofence: () -> Unit,
     onRemoveGeofence: () -> Unit,
     onOpenSettings: () -> Unit,
-    onSimulateArrival: () -> Unit,
-    onSimulateExit: () -> Unit,
+    onSimulateHome: () -> Unit,
+    onSimulateCampus: () -> Unit,
+    onSimulateAway: () -> Unit,
+    showDemo: Boolean,
 ) {
     SectionCard {
         SectionTitle(
-            title = "Home geofence",
+            title = title,
             trailing = {
                 Icon(
-                    imageVector = if (household?.homeLatitude != null) {
+                    imageVector = if (latitude != null) {
                         Icons.Rounded.LocationOn
                     } else {
                         Icons.Rounded.LocationOff
@@ -531,8 +589,6 @@ private fun LocationCard(
         )
         Spacer(Modifier.height(6.dp))
 
-        val latitude = household?.homeLatitude
-        val longitude = household?.homeLongitude
         if (latitude != null && longitude != null) {
             Text(
                 text = String.format(Locale.US, "%.5f, %.5f", latitude, longitude),
@@ -541,15 +597,13 @@ private fun LocationCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
-                text = "Geofence radius ${household.geofenceRadiusMeters.toInt()} m. " +
-                    "Entering marks you At home; leaving marks you Away.",
+                text = "Geofence radius ${radiusMeters.toInt()} m. $statusText",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
             Text(
-                text = "No home boundary yet. Stand at home, then save your current location. " +
-                    "Background location permission is required for automatic updates.",
+                text = emptyText,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -610,40 +664,45 @@ private fun LocationCard(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        Spacer(Modifier.height(12.dp))
+        if (showDemo) {
+            Spacer(Modifier.height(12.dp))
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    MaterialTheme.colorScheme.secondary.copy(alpha = 0.08f),
-                    RoundedCornerShape(14.dp),
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        MaterialTheme.colorScheme.secondary.copy(alpha = 0.08f),
+                        RoundedCornerShape(14.dp),
+                    )
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.NotificationsActive,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.size(18.dp),
                 )
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.NotificationsActive,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.secondary,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(Modifier.width(8.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Demo the pipeline", style = MaterialTheme.typography.labelLarge)
-                Text(
-                    "Simulate a boundary crossing without walking outside.",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Demo the pipeline", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        "Simulate a boundary crossing without walking outside.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = onSimulateArrival, modifier = Modifier.weight(1f)) {
-                Text("Arrive home")
-            }
-            TextButton(onClick = onSimulateExit, modifier = Modifier.weight(1f)) {
-                Text("Leave home")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onSimulateHome, modifier = Modifier.weight(1f)) {
+                    Text("Home")
+                }
+                TextButton(onClick = onSimulateCampus, modifier = Modifier.weight(1f)) {
+                    Text("Campus")
+                }
+                TextButton(onClick = onSimulateAway, modifier = Modifier.weight(1f)) {
+                    Text("Away")
+                }
             }
         }
     }

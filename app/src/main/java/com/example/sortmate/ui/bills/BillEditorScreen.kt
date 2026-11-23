@@ -80,7 +80,7 @@ fun BillEditorScreen(
         ScreenHeader(
             title = if (state.saved) "Bill saved" else "New bill",
             eyebrow = "Receipt pipeline",
-            subtitle = "CameraX → ML Kit OCR → Room → Firestore",
+            subtitle = "CameraX → ML Kit OCR → Room → Supabase",
             onBack = onBack,
         )
 

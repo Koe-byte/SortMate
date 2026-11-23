@@ -2,6 +2,7 @@ package com.example.sortmate.data.local.dao
 
 import androidx.room.Dao
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Upsert
 import com.example.sortmate.data.local.entity.HouseholdEntity
 import kotlinx.coroutines.flow.Flow
@@ -17,6 +18,11 @@ interface HouseholdDao {
 
     @Upsert
     suspend fun upsert(household: HouseholdEntity)
+
+    @Transaction
+    suspend fun mergeRemote(household: HouseholdEntity) {
+        if (get(household.id)?.isSynced != false) upsert(household)
+    }
 
     @Query(
         """
@@ -58,11 +64,27 @@ interface HouseholdDao {
     )
     suspend fun updateName(id: String, name: String, now: Long)
 
-    @Query("UPDATE households SET isSynced = 1 WHERE id = :id")
-    suspend fun markSynced(id: String)
+    @Query(
+        """
+        UPDATE households
+        SET campusLatitude = :latitude,
+            campusLongitude = :longitude,
+            campusRadiusMeters = :radiusMeters,
+            updatedAt = :now,
+            isSynced = 0
+        WHERE id = :id
+        """,
+    )
+    suspend fun updateCampusGeofence(
+        id: String,
+        latitude: Double,
+        longitude: Double,
+        radiusMeters: Float,
+        now: Long,
+    )
 
-    @Query("SELECT * FROM households WHERE isSynced = 0")
-    suspend fun getUnsynced(): List<HouseholdEntity>
+    @Query("UPDATE households SET isSynced = 1 WHERE id = :id AND updatedAt = :version")
+    suspend fun markSynced(id: String, version: Long)
 
     @Query("DELETE FROM households")
     suspend fun clear()

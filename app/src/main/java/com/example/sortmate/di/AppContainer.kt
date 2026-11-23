@@ -1,13 +1,16 @@
 package com.example.sortmate.di
 
 import android.content.Context
+import com.example.sortmate.BuildConfig
 import com.example.sortmate.data.local.SortMateDatabase
 import com.example.sortmate.data.prefs.UserPreferences
-import com.example.sortmate.data.remote.FirestoreDataSource
+import com.example.sortmate.data.remote.RemoteDataSource
+import com.example.sortmate.data.remote.SupabaseDataSource
 import com.example.sortmate.data.repository.AuthRepository
 import com.example.sortmate.data.repository.BillRepository
 import com.example.sortmate.data.repository.ChoreRepository
 import com.example.sortmate.data.repository.HouseholdRepository
+import com.example.sortmate.data.sync.NetworkMonitor
 import com.example.sortmate.data.sync.RealtimeSyncManager
 import com.example.sortmate.location.GeofenceManager
 import com.example.sortmate.location.LocationProvider
@@ -15,10 +18,16 @@ import com.example.sortmate.notifications.NotificationHelper
 import com.example.sortmate.notifications.ReminderScheduler
 import com.example.sortmate.ocr.ReceiptOcrProcessor
 import com.google.firebase.messaging.FirebaseMessaging
+import io.github.jan.supabase.SupabaseClient
+import io.github.jan.supabase.auth.Auth
+import io.github.jan.supabase.createSupabaseClient
+import io.github.jan.supabase.postgrest.Postgrest
+import io.github.jan.supabase.realtime.Realtime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -47,10 +56,35 @@ class AppContainer(private val context: Context) {
         }.getOrDefault(false)
     }
 
+    /** True when local.properties supplied both Supabase values at build time. */
+    private val supabaseConfigured: Boolean by lazy {
+        BuildConfig.SUPABASE_URL.isNotBlank() && BuildConfig.SUPABASE_PUBLISHABLE_KEY.isNotBlank()
+    }
+
+    private val supabaseClient: SupabaseClient? by lazy {
+        if (!supabaseConfigured) {
+            null
+        } else {
+            runCatching {
+                createSupabaseClient(
+                    supabaseUrl = BuildConfig.SUPABASE_URL,
+                    supabaseKey = BuildConfig.SUPABASE_PUBLISHABLE_KEY,
+                ) {
+                    install(Auth)
+                    install(Postgrest)
+                    install(Realtime)
+                }
+            }.getOrNull()
+        }
+    }
+
     val database: SortMateDatabase by lazy { SortMateDatabase.build(appContext) }
     val userPreferences: UserPreferences by lazy { UserPreferences(appContext) }
-    val remoteDataSource: FirestoreDataSource by lazy { FirestoreDataSource(firebaseAvailable) }
-    val authRepository: AuthRepository by lazy { AuthRepository(firebaseAvailable) }
+    val remoteDataSource: RemoteDataSource by lazy {
+        SupabaseDataSource(supabaseClient, applicationScope)
+    }
+    val authRepository: AuthRepository by lazy { AuthRepository(supabaseClient) }
+    val supabaseAvailable: Boolean get() = remoteDataSource.isAvailable
 
     val householdRepository: HouseholdRepository by lazy {
         HouseholdRepository(
@@ -66,11 +100,11 @@ class AppContainer(private val context: Context) {
     }
 
     val billRepository: BillRepository by lazy {
-        BillRepository(database.billDao(), remoteDataSource)
+        BillRepository(database.billDao(), remoteDataSource, userPreferences)
     }
 
     val choreRepository: ChoreRepository by lazy {
-        ChoreRepository(database.choreDao(), remoteDataSource)
+        ChoreRepository(database.choreDao(), remoteDataSource, userPreferences)
     }
 
     val realtimeSyncManager: RealtimeSyncManager by lazy {
@@ -80,10 +114,10 @@ class AppContainer(private val context: Context) {
             memberDao = database.memberDao(),
             billDao = database.billDao(),
             choreDao = database.choreDao(),
-            scope = applicationScope,
         )
     }
 
+    val networkMonitor: NetworkMonitor by lazy { NetworkMonitor(appContext) }
     val geofenceManager: GeofenceManager by lazy { GeofenceManager(appContext) }
     val locationProvider: LocationProvider by lazy { LocationProvider(appContext) }
     val notificationHelper: NotificationHelper by lazy { NotificationHelper(appContext) }
@@ -106,11 +140,7 @@ class AppContainer(private val context: Context) {
                 .map { it.householdId }
                 .distinctUntilChanged()
                 .collectLatest { householdId ->
-                    if (householdId == null) {
-                        realtimeSyncManager.stop()
-                        return@collectLatest
-                    }
-                    if (firebaseAvailable) realtimeSyncManager.start(householdId)
+                    if (householdId == null) return@collectLatest
                     database.householdDao().observe(householdId)
                         .filterNotNull()
                         .distinctUntilChanged { a, b ->
@@ -129,12 +159,37 @@ class AppContainer(private val context: Context) {
         }
 
         applicationScope.launch {
-            if (!firebaseAvailable) return@launch
+            combine(
+                userPreferences.session.map { it.cloudHouseholdId }.distinctUntilChanged(),
+                networkMonitor.isOnline,
+            ) { householdId, online -> householdId to online }
+                .collectLatest { (householdId, online) ->
+                    if (householdId == null || !online || !supabaseAvailable) {
+                        realtimeSyncManager.stop()
+                        return@collectLatest
+                    }
+                    if (authRepository.ensureUserId() == null) {
+                        realtimeSyncManager.stop()
+                        return@collectLatest
+                    }
+                    realtimeSyncManager.start(householdId)
+                    householdRepository.syncPending()
+                    billRepository.syncPending()
+                    choreRepository.syncPending()
+                    householdRepository.refreshFromRemote()
+                }
+        }
+
+        applicationScope.launch {
+            if (!firebaseAvailable || !supabaseConfigured) return@launch
             userPreferences.session
-                .map { it.memberId }
+                .map { session -> session.memberId.takeIf { session.cloudBacked } }
                 .distinctUntilChanged()
                 .collectLatest { memberId ->
                     if (memberId == null) return@collectLatest
+                    // The sender targets legacy FCM registration tokens. register() opts into
+                    // the installation-ID protocol and does not return a token for this backend.
+                    @Suppress("DEPRECATION")
                     val token = runCatching { FirebaseMessaging.getInstance().token.await() }.getOrNull()
                     if (token != null) householdRepository.updateFcmToken(token)
                 }

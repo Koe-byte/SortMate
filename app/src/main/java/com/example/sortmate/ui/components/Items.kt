@@ -61,7 +61,9 @@ fun BillCard(
     }
 
     Card(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().markFirstDraw(
+            "bill_draw id=${bill.id} version_ms=${bill.updatedAt} synced=${bill.isSynced}",
+        ),
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = androidx.compose.foundation.BorderStroke(

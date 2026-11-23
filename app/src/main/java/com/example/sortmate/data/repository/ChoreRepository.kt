@@ -2,14 +2,20 @@ package com.example.sortmate.data.repository
 
 import com.example.sortmate.data.local.dao.ChoreDao
 import com.example.sortmate.data.local.entity.ChoreEntity
-import com.example.sortmate.data.remote.FirestoreDataSource
+import com.example.sortmate.data.prefs.UserPreferences
+import com.example.sortmate.data.remote.RemoteDataSource
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 
 class ChoreRepository(
     private val choreDao: ChoreDao,
-    private val remote: FirestoreDataSource,
+    private val remote: RemoteDataSource,
+    private val preferences: UserPreferences,
 ) {
+    private val upload = Mutex()
 
     fun observeChores(householdId: String): Flow<List<ChoreEntity>> =
         choreDao.observeChores(householdId)
@@ -29,7 +35,7 @@ class ChoreRepository(
             dueAt = dueAt,
         )
         choreDao.upsert(chore)
-        if (remote.upsertChore(chore)) choreDao.markSynced(id)
+        push(chore.id)
         return id
     }
 
@@ -37,26 +43,27 @@ class ChoreRepository(
         val now = System.currentTimeMillis()
         val completedAt = if (completed) now else null
         choreDao.setCompleted(chore.id, completed, completedAt, now)
-        val updated = chore.copy(
-            isCompleted = completed,
-            completedAt = completedAt,
-            updatedAt = now,
-            isSynced = false,
-        )
-        if (remote.upsertChore(updated)) choreDao.markSynced(updated.id)
+        push(chore.id)
     }
 
     suspend fun deleteChore(chore: ChoreEntity) {
         val now = System.currentTimeMillis()
         choreDao.softDelete(chore.id, now)
-        val updated = chore.copy(isDeleted = true, updatedAt = now, isSynced = false)
-        if (remote.deleteChore(updated)) choreDao.markSynced(updated.id)
+        push(chore.id)
     }
 
     suspend fun syncPending() {
-        choreDao.getUnsynced().forEach { chore ->
-            val synced = if (chore.isDeleted) remote.deleteChore(chore) else remote.upsertChore(chore)
-            if (synced) choreDao.markSynced(chore.id)
+        if (!remote.isAvailable) return
+        val householdId = preferences.session.first().cloudHouseholdId ?: return
+        choreDao.getUnsynced(householdId).forEach { push(it.id) }
+    }
+
+    private suspend fun push(id: String) = upload.withLock {
+        val chore = choreDao.get(id) ?: return@withLock
+        val session = preferences.session.first()
+        if (chore.isSynced || session.householdId != chore.householdId) return@withLock
+        if (!session.cloudBacked || remote.upsertChore(chore)) {
+            choreDao.markSynced(id, chore.updatedAt)
         }
     }
 }

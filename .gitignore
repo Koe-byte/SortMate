@@ -17,9 +17,23 @@ local.properties
 .DS_Store
 Thumbs.db
 
-# Firebase config is environment-specific and should not be committed in public repos.
-# Remove this line if your instructor requires the config in the repository.
-app/google-services.json
+# Firebase / FCM config is environment-specific and must not be committed.
+google-services.json
+*firebase-adminsdk*.json
+service-account*.json
+.secrets/
+
+# Supabase local secrets and CLI state
+.env
+supabase/.env
+supabase/.temp/
+
+# Graphify generated outputs
+graphify-out/
+docs/graph/
+docs/.obsidian/workspace*.json
+docs/.trash/
+.scratch/defense-artifacts/
 
 # Build outputs and signing material
 *.apk
